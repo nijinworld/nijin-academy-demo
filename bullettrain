@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>新幹線ビュンビュン走行</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #87CEEB; /* 空の基本色 */
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            touch-action: none; /* モバイルでのスクロール防止 */
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100vh;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px 25px;
+            border-radius: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            z-index: 10;
+            backdrop-filter: blur(5px);
+            max-width: 90%;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        label {
+            font-weight: bold;
+            color: #333;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+
+        input[type="range"] {
+            width: 150px;
+            cursor: pointer;
+        }
+
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        button.mode-btn {
+            background: #444;
+        }
+        
+        button.mode-btn:hover {
+            background: #222;
+        }
+
+        /* スピード線のアニメーション用スタイル（Canvas外） */
+        .speed-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 5;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <div class="control-group">
+            <label for="speedSlider">スピード:</label>
+            <input type="range" id="speedSlider" min="0" max="100" value="50">
+        </div>
+        <div class="control-group">
+            <button id="toggleTimeBtn" class="mode-btn">時間帯切替</button>
+        </div>
+        <div style="font-size: 12px; color: #666; margin-left: 10px;">
+            <span id="speedDisplay">285</span> km/h
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+/**
+ * 新幹線アニメーションロジック
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// 状態管理
+const state = {
+    speed: 50, // 0-100
+    baseSpeed: 0, // 内部計算用
+    timeOfDay: 0, // 0: 昼, 1: 夕方, 2: 夜
+    frameCount: 0,
+    width: window.innerWidth,
+    height: window.innerHeight
+};
+
+// 色定義
+const colors = {
+    day: { sky: ['#4FACFE', '#00F2FE'], ground: '#e0e0e0', mountain: '#8fbcd4' },
+    sunset: { sky: ['#fd746c', '#ff9068'], ground: '#6d5e5e', mountain: '#5e4b52' },
+    night: { sky: ['#0f2027', '#203a43'], ground: '#1a1a1a', mountain: '#101820' }
+};
+
+// オブジェクト管理
+const scenery = {
+    mountains: [],
+    buildings: [],
+    poles: [],
+    clouds: [],
+    particles: [] // スピード線や火花
+};
+
+// 初期化
+function init() {
+    resize();
+    window.addEventListener('resize', resize);
+    
+    // UIイベントリスナー
+    const slider = document.getElementById('speedSlider');
+    const speedDisplay = document.getElementById('speedDisplay');
+    const toggleBtn = document.getElementById('toggleTimeBtn');
+
+    slider.addEventListener('input', (e) => {
+        state.speed = parseInt(e.target.value);
+        // 表示用速度計算 (適当な演出値)
+        const kmh = Math.floor(state.speed * 4 + (state.speed > 0 ? 50 : 0));
+        speedDisplay.textContent = state.speed === 0 ? 0 : kmh;
+    });
+
+    toggleBtn.addEventListener('click', () => {
+        state.timeOfDay = (state.timeOfDay + 1) % 3;
+    });
+
+    // オブジェクト初期生成
+    generateScenery();
+    
+    requestAnimationFrame(loop);
+}
+
+function resize() {
+    state.width = window.innerWidth;
+    state.height = window.innerHeight;
+    canvas.width = state.width;
+    canvas.height = state.height;
+}
+
+function generateScenery() {
+    // 山
+    for(let i=0; i<3; i++) {
+        scenery.mountains.push({
+            x: i * state.width * 0.8,
+            h: 150 + Math.random() * 200,
+            w: state.width * 0.8
+        });
+    }
+    // 建物
+    for(let i=0; i<20; i++) {
+        scenery.buildings.push({
+            x: Math.random() * state.width,
+            w: 30 + Math.random() * 80,
+            h: 50 + Math.random() * 150,
+            windows: Math.random() > 0.5
+        });
+    }
+    // 電柱
+    for(let i=0; i<10; i++) {
+        scenery.poles.push({
+            x: i * (state.width / 5)
+        });
+    }
+    // 雲
+    for(let i=0; i<5; i++) {
+        scenery.clouds.push({
+            x: Math.random() * state.width,
+            y: Math.random() * (state.height / 3),
+            scale: 0.5 + Math.random() * 1
+        });
+    }
+}
+
+// メインループ
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+function update() {
+    state.frameCount++;
+    // スライダーの値を実際の移動速度に変換 (非線形にして高速域を強調)
+    state.baseSpeed = Math.pow(state.speed, 1.5) * 0.05;
+
+    // オブジェクトの移動 (右から左へ)
+    
+    // 雲 (ゆっくり)
+    scenery.clouds.forEach(c => {
+        c.x -= state.baseSpeed * 0.1 + 0.2;
+        if(c.x < -200) c.x = state.width + 200;
+    });
+
+    // 山 (かなりゆっくり)
+    scenery.mountains.forEach(m => {
+        m.x -= state.baseSpeed * 0.2;
+        if(m.x + m.w < 0) m.x = state.width; // 簡易ループ
+        // 厳密なつなぎ目は簡略化しています
+        if (scenery.mountains[0].x < -scenery.mountains[0].w) {
+             let first = scenery.mountains.shift();
+             first.x = scenery.mountains[scenery.mountains.length-1].x + scenery.mountains[scenery.mountains.length-1].w * 0.8; 
+             scenery.mountains.push(first);
+        }
+    });
+
+    // 建物 (中速)
+    scenery.buildings.forEach(b => {
+        b.x -= state.baseSpeed * 1.5;
+        if(b.x + b.w < 0) {
+            b.x = state.width + Math.random() * 200;
+            b.h = 50 + Math.random() * 200;
+            b.w = 30 + Math.random() * 80;
+        }
+    });
+
+    // 電柱 (高速)
+    scenery.poles.forEach(p => {
+        p.x -= state.baseSpeed * 4; // 一番手前
+        if(p.x < -50) p.x = state.width + Math.random() * 50;
+    });
+
+    // パーティクル（スピード線）生成
+    if (state.speed > 30 && Math.random() < 0.3) {
+        scenery.particles.push({
+            x: state.width,
+            y: Math.random() * state.height,
+            w: 50 + Math.random() * 200,
+            speed: state.baseSpeed * 5 + 10,
+            life: 1.0
+        });
+    }
+
+    // パーティクル更新
+    for (let i = scenery.particles.length - 1; i >= 0; i--) {
+        let p = scenery.particles[i];
+        p.x -= p.speed;
+        p.life -= 0.05;
+        if (p.life <= 0 || p.x < -p.w) {
+            scenery.particles.splice(i, 1);
+        }
+    }
+}
+
+function draw() {
+    // 現在のテーマ設定
+    let theme;
+    if (state.timeOfDay === 0) theme = colors.day;
+    else if (state.timeOfDay === 1) theme = colors.sunset;
+    else theme = colors.night;
+
+    // 空（背景）
+    const grad = ctx.createLinearGradient(0, 0, 0, state.height);
+    grad.addColorStop(0, theme.sky[0]);
+    grad.addColorStop(1, theme.sky[1]);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, state.width, state.height);
+
+    // 太陽または月
+    if (state.timeOfDay !== 2) {
+        ctx.fillStyle = state.timeOfDay === 0 ? 'rgba(255, 255, 220, 0.8)' : '#ff512f';
+        ctx.beginPath();
+        ctx.arc(state.width * 0.8, state.height * 0.2, 40, 0, Math.PI * 2);
+        ctx.fill();
+    } else {
+        ctx.fillStyle = '#fdfbf7';
+        ctx.beginPath();
+        ctx.arc(state.width * 0.8, state.height * 0.2, 20, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 雲
+    drawClouds(theme);
+
+    // 山
+    const groundY = state.height * 0.75;
+    ctx.fillStyle = theme.mountain;
+    scenery.mountains.forEach(m => {
+        ctx.beginPath();
+        ctx.moveTo(m.x, groundY);
+        ctx.lineTo(m.x + m.w/2, groundY - m.h);
+        ctx.lineTo(m.x + m.w, groundY);
+        ctx.fill();
+        // 富士山っぽい雪
+        if (m.h > 200) {
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.beginPath();
+            ctx.moveTo(m.x + m.w/2, groundY - m.h);
+            ctx.lineTo(m.x + m.w/2 - 40, groundY - m.h + 60);
+            // ジグザグ
+            ctx.lineTo(m.x + m.w/2 - 10, groundY - m.h + 50);
+            ctx.lineTo(m.x + m.w/2 + 10, groundY - m.h + 60);
+            ctx.lineTo(m.x + m.w/2 + 40, groundY - m.h + 55);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = theme.mountain;
+        }
+    });
+
+    // 遠景の街並み
+    ctx.fillStyle = state.timeOfDay === 2 ? '#050505' : 'rgba(100,100,100,0.5)';
+    scenery.buildings.forEach(b => {
+        ctx.fillRect(b.x, groundY - b.h, b.w, b.h);
+        // 夜は窓明かり
+        if (state.timeOfDay === 2 && b.windows) {
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
+            for(let wy = groundY - b.h + 10; wy < groundY - 10; wy += 20) {
+                if (Math.random() > 0.3) ctx.fillRect(b.x + 5, wy, b.w - 10, 10);
+            }
+            ctx.fillStyle = '#050505';
+        }
+    });
+
+    // 地面
+    ctx.fillStyle = theme.ground;
+    ctx.fillRect(0, groundY, state.width, state.height - groundY);
+
+    // 線路の砂利部分
+    ctx.fillStyle = '#666';
+    ctx.fillRect(0, groundY + 20, state.width, 100);
+
+    // 手前の電柱（新幹線の奥側にある設定）
+    // 速度感を出すためループ
+    
+    // 新幹線描画
+    drawTrain(groundY + 40);
+
+    // 最前列の電柱（架線柱）
+    drawPoles(groundY + 120, theme);
+
+    // スピード線（エフェクト）
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 2;
+    scenery.particles.forEach(p => {
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x + p.w, p.y);
+        ctx.stroke();
+    });
+}
+
+function drawClouds(theme) {
+    ctx.fillStyle = state.timeOfDay === 2 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.6)';
+    scenery.clouds.forEach(c => {
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 30 * c.scale, 0, Math.PI * 2);
+        ctx.arc(c.x + 40 * c.scale, c.y + 10 * c.scale, 40 * c.scale, 0, Math.PI * 2);
+        ctx.arc(c.x - 40 * c.scale, c.y + 10 * c.scale, 35 * c.scale, 0, Math.PI * 2);
+        ctx.fill();
+    });
+}
+
+function drawTrain(y) {
+    const trainX = state.width * 0.1; // 画面左側に固定
+    const trainLen = 600;
+    const trainHeight = 80;
+    
+    // 振動エフェクト
+    const shake = state.speed > 0 ? Math.sin(state.frameCount * 0.5) * 1.5 : 0;
+    const drawY = y + shake;
+
+    // 影
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(trainX + 20, drawY + trainHeight - 5, trainLen - 40, 10);
+
+    // 車体メイン (N700系風の白)
+    ctx.fillStyle = '#FFFFFF';
+    
+    // 先頭車両の形状（ノーズ）
+    ctx.beginPath();
+    ctx.moveTo(trainX, drawY + trainHeight); // 後ろ下
+    ctx.lineTo(trainX, drawY); // 後ろ上
+    ctx.lineTo(trainX + trainLen - 150, drawY); // 屋根平ら
+    // 流線型ノーズ
+    ctx.bezierCurveTo(
+        trainX + trainLen, drawY + 10, 
+        trainX + trainLen + 100, drawY + trainHeight/2, 
+        trainX + trainLen - 20, drawY + trainHeight // ノーズ先端下
+    );
+    ctx.lineTo(trainX, drawY + trainHeight);
+    ctx.fill();
+
+    // 青いライン (帯)
+    ctx.fillStyle = '#003399';
+    ctx.beginPath();
+    ctx.moveTo(trainX, drawY + 45);
+    ctx.lineTo(trainX + trainLen - 80, drawY + 45);
+    // ラインもカーブに合わせる
+    ctx.bezierCurveTo(
+        trainX + trainLen, drawY + 45,
+        trainX + trainLen + 20, drawY + 60,
+        trainX + trainLen - 30, drawY + 65
+    );
+    ctx.lineTo(trainX, drawY + 65);
+    ctx.fill();
+
+    // 窓 (黒)
+    ctx.fillStyle = '#222';
+    const windowStart = trainX + 20;
+    for(let i=0; i<8; i++) {
+        ctx.fillRect(windowStart + i * 50, drawY + 25, 35, 15);
+    }
+    // 運転席の窓
+    ctx.beginPath();
+    ctx.moveTo(trainX + trainLen - 140, drawY + 20);
+    ctx.lineTo(trainX + trainLen - 90, drawY + 20);
+    ctx.lineTo(trainX + trainLen - 60, drawY + 35);
+    ctx.lineTo(trainX + trainLen - 140, drawY + 35);
+    ctx.fill();
+
+    // 床下機器カバー
+    ctx.fillStyle = '#CCCCCC';
+    ctx.fillRect(trainX + 10, drawY + trainHeight - 5, trainLen - 100, 15);
+
+    // パンタグラフ
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    const pX = trainX + 100;
+    ctx.moveTo(pX, drawY);
+    ctx.lineTo(pX + 20, drawY - 20); // アーム
+    ctx.lineTo(pX - 10, drawY - 20); // 集電舟
+    ctx.stroke();
+
+    // スパーク（高速時のみ）
+    if (state.speed > 70 && Math.random() > 0.7) {
+        ctx.fillStyle = '#FFF700';
+        ctx.beginPath();
+        ctx.arc(pX + 5, drawY - 20, 3 + Math.random()*5, 0, Math.PI*2);
+        ctx.fill();
+    }
+}
+
+function drawPoles(baseY, theme) {
+    // 架線柱（手前を高速で流す）
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 8;
+    
+    scenery.poles.forEach(p => {
+        // 柱
+        ctx.beginPath();
+        ctx.moveTo(p.x, baseY);
+        ctx.lineTo(p.x, baseY - 300);
+        ctx.stroke();
+
+        // ビーム（横棒）
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(p.x, baseY - 250);
+        ctx.lineTo(p.x + 300, baseY - 250); // 画面奥へ伸びるイメージだが2Dなので横へ
+        ctx.stroke();
+
+        // ガイシ
+        ctx.fillStyle = '#EEE';
+        ctx.beginPath();
+        ctx.arc(p.x + 50, baseY - 250, 4, 0, Math.PI*2);
+        ctx.arc(p.x + 150, baseY - 250, 4, 0, Math.PI*2);
+        ctx.fill();
+    });
+
+    // 架線（電線）を描く（ポールとポールの間をつなぐ）
+    // 簡易的に横一直線に引く
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#333';
+    ctx.beginPath();
+    ctx.moveTo(0, baseY - 260);
+    ctx.lineTo(state.width, baseY - 260);
+    ctx.moveTo(0, baseY - 240);
+    ctx.lineTo(state.width, baseY - 240);
+    ctx.stroke();
+}
+
+// 開始
+init();
+
+</script>
+</body>
+</html>
